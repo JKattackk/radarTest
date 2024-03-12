@@ -6,6 +6,7 @@
 #include "pico/multicore.h"
 #include "hardware/pio.h"
 #include "resistor_dac.pio.h"
+#include "math.h"
 //FFT
 #include "kiss_fftr.h"
 
@@ -16,6 +17,14 @@
 #define CAPTURE_DEPTH 8192
 #define LED_PIN 25
 #define TIMING_TEST 15
+#define ANT_DIST 10*10^-3
+#define FMCW_SLOPE 
+#define c 3*10^8
+#define SAMP_RATE 40*10^3
+
+#define CLOCK 15
+#define TX 16
+#define CE 14
 
 //globals
 uint8_t capture_buf[CAPTURE_DEPTH];
@@ -36,9 +45,14 @@ int main(void) {
     kiss_fft_cpx fft_out1[CAPTURE_DEPTH/2];
     kiss_fft_cpx fft_out2[CAPTURE_DEPTH/2];
     kiss_fftr_cfg FFTcfg = kiss_fftr_alloc(CAPTURE_DEPTH,false,0,0);
+    
     while(1){
+        //High on TX triggers the ramp (after a delay)
+        gpio_put(TX, 1);
+        //sleep
+        gpio_put(TX, 0);
+        //this sample should catch the CW before the ramp begins
         sample();
-
         //since sampling is round robin but results are stored in the same buffer, 
         //every second result in the array belongs to the same sampling set
         for (int i=0;i<CAPTURE_DEPTH;i++) {
@@ -64,7 +78,9 @@ int main(void) {
             } 
         }
         float max_freq = freqs[max_idx];
+        float phase = atan(fft_out1[max_idx].i/fft_out1[max_idx].r);
         printf("Greatest Frequency Component C1: %0.1f Hz\n",max_freq);
+        printf("phase C1: %0.1f rad\n", phase);
 
         for (int i = 1; i < CAPTURE_DEPTH/2; i++) {
             float power = fft_out2[i].r*fft_out2[i].r+fft_out2[i].i*fft_out2[i].i;
@@ -73,8 +89,32 @@ int main(void) {
 	            max_idx = i;
             } 
         }
+        float max_freq = freqs[max_idx];
+        float phase = atan(fft_out2[max_idx].i/fft_out2[max_idx].r);
         printf("Greatest Frequency Component C2: %0.1f Hz\n",max_freq);
-        sleep_ms(1000);
+        printf("phase C2: %0.1f rad\n", phase);
+
+        //may need to do this before the FFT calcs if we're missing the ramp
+        sample();
+        //we only need one of the two channels for this calculation.
+        for (int i=0;i<CAPTURE_DEPTH;i++) {
+            if(i%2){fft_in1[i]=(float)capture_buf[i];}
+        }
+        //calculate FFT
+        kiss_fftr(FFTcfg , fft_in1, fft_out1);
+        //determine dominant freq
+        for (int i = 1; i < CAPTURE_DEPTH/2; i++) {
+            float power = fft_out1[i].r*fft_out1[i].r+fft_out1[i].i*fft_out1[i].i;
+            if (power>max_power) {
+	            max_power=power;
+	            max_idx = i;
+            } 
+        }
+        float max_freq = freqs[max_idx];
+        printf("Greatest Frequency Component C1: %0.1f Hz\n",max_freq);
+        
+
+
     }
 }
   
@@ -113,6 +153,8 @@ void sample()
 }
 void setup()
 {
+    gpio_init(TX);
+    gpio_set_dir(TX, GPIO_OUT);
     // claiming the DMA channel here, configuring it in the sample function
     //this prevents us from running out of DMA channels which causes the program to stop
     dma_chan = dma_claim_unused_channel(true);
