@@ -11,15 +11,14 @@
 #include "kiss_fftr.h"
 
 // Channel 0 is GPIO26
-#define CAPTURE_CHANNEL 0
-#define CAPTURE_CHANNEL2 1
+#define CAPTURE_CHANNEL 27
+#define CAPTURE_CHANNEL2 28
 //capturing 8192 samples from two channels, 4096 per channel
 #define CAPTURE_DEPTH 8192
-#define LED_PIN 25
-#define TIMING_TEST 15
-#define ANT_DIST 10*10^-3
-#define FMCW_SLOPE 
-#define c 3*10^8
+//#define LED_PIN 25
+//#define ANT_DIST 10*10^-3
+//#define FMCW_SLOPE 
+//#define c 3*10^8
 #define SAMP_RATE 40*10^3
 
 #define CLOCK 15
@@ -37,68 +36,76 @@ void sample();
 
 int main(void) {
     stdio_init_all();
-    printf("starting setup");
+    sleep_ms(1000);
+    printf("starting setup\n");
     setup();
+    
 
     kiss_fft_scalar fft_in1[CAPTURE_DEPTH/2];
     kiss_fft_scalar fft_in2[CAPTURE_DEPTH/2];
     kiss_fft_cpx fft_out1[CAPTURE_DEPTH/2];
     kiss_fft_cpx fft_out2[CAPTURE_DEPTH/2];
-    kiss_fftr_cfg FFTcfg = kiss_fftr_alloc(CAPTURE_DEPTH,false,0,0);
-    
+    kiss_fftr_cfg FFTcfg = kiss_fftr_alloc(CAPTURE_DEPTH/2,false,0,0);
+
+    float power;
+    int max_idx;
+    float max_power;
+    printf("beginning loop\n");
     while(1){
-        //High on TX triggers the ramp (after a delay)
-        gpio_put(TX, 1);
-        //sleep
-        gpio_put(TX, 0);
-        //this sample should catch the CW before the ramp begins
+        printf("beginning sampling 1\n");
         sample();
         //since sampling is round robin but results are stored in the same buffer, 
         //every second result in the array belongs to the same sampling set
         for (int i=0;i<CAPTURE_DEPTH;i++) {
-            if(i%2){fft_in1[i]=(float)capture_buf[i];}
-            else{fft_in2[i]=(float)capture_buf[i];}
+            if(i%2){fft_in1[(int)(i/2)]=(float)capture_buf[i];}
+            else{fft_in2[(int)(i/2)]=(float)capture_buf[i];}
         }
-    
+        printf("beginning FFT 1\n");
         // compute fast fourier transform
-        //gpio_put(TIMING_TEST, 1);
         kiss_fftr(FFTcfg , fft_in1, fft_out1);
         kiss_fftr(FFTcfg , fft_in2, fft_out2);
-        //gpio_put(TIMING_TEST, 0);
-
+        printf("finished FFT 1\n");
         // basically just determine which frequency bin has the most power
         // to determine the dominant frequency in the signal
-        float max_power = 0;
-        int max_idx = 0;
+        max_power = 0;
+        max_idx = 0;
+        power  = 0;
         for (int i = 1; i < CAPTURE_DEPTH/2; i++) {
-            float power = fft_out1[i].r*fft_out1[i].r+fft_out1[i].i*fft_out1[i].i;
+            power = fft_out1[i].r*fft_out1[i].r+fft_out1[i].i*fft_out1[i].i;
             if (power>max_power) {
-	            max_power=power;
-	            max_idx = i;
+                max_power=power;
+                max_idx = i;
             } 
         }
+        //phase and frequency calcs
         float max_freq = freqs[max_idx];
         float phase = atan(fft_out1[max_idx].i/fft_out1[max_idx].r);
         printf("Greatest Frequency Component C1: %0.1f Hz\n",max_freq);
         printf("phase C1: %0.1f rad\n", phase);
-
+        //repeating for channel 2
+        //combining these loops may make things more efficient
+        max_power = 0;
         for (int i = 1; i < CAPTURE_DEPTH/2; i++) {
             float power = fft_out2[i].r*fft_out2[i].r+fft_out2[i].i*fft_out2[i].i;
             if (power>max_power) {
-	            max_power=power;
-	            max_idx = i;
+                max_power=power;
+                max_idx = i;
             } 
         }
-        float max_freq = freqs[max_idx];
-        float phase = atan(fft_out2[max_idx].i/fft_out2[max_idx].r);
-        printf("Greatest Frequency Component C2: %0.1f Hz\n",max_freq);
-        printf("phase C2: %0.1f rad\n", phase);
-
-        //may need to do this before the FFT calcs if we're missing the ramp
+        float max_freq2 = freqs[max_idx];
+        float phase2 = atan(fft_out2[max_idx].i/fft_out2[max_idx].r);
+        printf("Greatest Frequency Component C2: %0.1f Hz\n",max_freq2);
+        printf("phase C2: %0.1f rad\n", phase2);
+        //begin FMCW ramp
+        gpio_put(TX, 1);
+        sleep_ms(1000);
+        gpio_put(TX, 0);
+        //may need longer delay here if FMCW ramp is still nonlinear
+        printf("beginning sampling2\n");
         sample();
         //we only need one of the two channels for this calculation.
         for (int i=0;i<CAPTURE_DEPTH;i++) {
-            if(i%2){fft_in1[i]=(float)capture_buf[i];}
+            if(i%2){fft_in1[(int)(i/2)]=(float)capture_buf[i];}
         }
         //calculate FFT
         kiss_fftr(FFTcfg , fft_in1, fft_out1);
@@ -106,13 +113,13 @@ int main(void) {
         for (int i = 1; i < CAPTURE_DEPTH/2; i++) {
             float power = fft_out1[i].r*fft_out1[i].r+fft_out1[i].i*fft_out1[i].i;
             if (power>max_power) {
-	            max_power=power;
-	            max_idx = i;
+                max_power=power;
+                max_idx = i;
             } 
         }
-        float max_freq = freqs[max_idx];
+        max_freq = freqs[max_idx];
         printf("Greatest Frequency Component C1: %0.1f Hz\n",max_freq);
-        
+        //frequency change (from ramp) would be this minus the doppler shift
 
 
     }
@@ -121,7 +128,7 @@ int main(void) {
 
 void sample()
 {
-    sleep_ms(1000);
+    sleep_ms(10);
 
     //configuring DMA channel
     dma_channel_config cfg = dma_channel_get_default_config(dma_chan);
@@ -140,16 +147,17 @@ void sample()
         true            // start immediately
     );
     //gpio_put(TIMING_TEST, 1);
-    //printf("Starting capture\n");
+    printf("Starting capture\n");
     adc_run(true);
 
     //wait for DMA to collect enough samples
     //stop the ADC and flush the fifo
     dma_channel_wait_for_finish_blocking(dma_chan);
     //gpio_put(TIMING_TEST, 0);
-    //printf("Capture finished\n");
+    printf("Capture finished\n");
     adc_run(false);
     adc_fifo_drain();
+    printf("Exiting sample func\n");
 }
 void setup()
 {
@@ -158,10 +166,6 @@ void setup()
     // claiming the DMA channel here, configuring it in the sample function
     //this prevents us from running out of DMA channels which causes the program to stop
     dma_chan = dma_claim_unused_channel(true);
-
-    //initialize pins
-    gpio_init(TIMING_TEST);
-    gpio_set_dir(TIMING_TEST, GPIO_OUT);
 
     //ADC init
     adc_gpio_init(26 + CAPTURE_CHANNEL);
