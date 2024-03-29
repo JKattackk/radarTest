@@ -14,7 +14,7 @@
 #define CAPTURE_CHANNEL 27
 #define CAPTURE_CHANNEL2 28
 //capturing 8192 samples from two channels, 4096 per channel
-#define CAPTURE_DEPTH 8192
+#define CAPTURE_DEPTH 4096
 //#define LED_PIN 25
 //#define ANT_DIST 10*10^-3
 //#define FMCW_SLOPE 
@@ -41,11 +41,11 @@ int main(void) {
     setup();
     
 
-    kiss_fft_scalar fft_in1[CAPTURE_DEPTH/2];
-    kiss_fft_scalar fft_in2[CAPTURE_DEPTH/2];
-    kiss_fft_cpx fft_out1[CAPTURE_DEPTH/2];
-    kiss_fft_cpx fft_out2[CAPTURE_DEPTH/2];
-    kiss_fftr_cfg FFTcfg = kiss_fftr_alloc(CAPTURE_DEPTH/2,false,0,0);
+    kiss_fft_scalar fft_in1[CAPTURE_DEPTH];
+    //kiss_fft_scalar fft_in2[CAPTURE_DEPTH/2];
+    kiss_fft_cpx fft_out1[CAPTURE_DEPTH];
+    //kiss_fft_cpx fft_out2[CAPTURE_DEPTH/2];
+    kiss_fftr_cfg FFTcfg = kiss_fftr_alloc(CAPTURE_DEPTH,false,0,0);
 
     float power;
     int max_idx;
@@ -57,13 +57,11 @@ int main(void) {
         //since sampling is round robin but results are stored in the same buffer, 
         //every second result in the array belongs to the same sampling set
         for (int i=0;i<CAPTURE_DEPTH;i++) {
-            if(i%2){fft_in1[(int)(i/2)]=(float)capture_buf[i];}
-            else{fft_in2[(int)(i/2)]=(float)capture_buf[i];}
+            fft_in1[i]=(float)capture_buf[i];
         }
         printf("beginning FFT 1\n");
         // compute fast fourier transform
         kiss_fftr(FFTcfg , fft_in1, fft_out1);
-        kiss_fftr(FFTcfg , fft_in2, fft_out2);
         printf("finished FFT 1\n");
         // basically just determine which frequency bin has the most power
         // to determine the dominant frequency in the signal
@@ -82,45 +80,6 @@ int main(void) {
         float phase = atan(fft_out1[max_idx].i/fft_out1[max_idx].r);
         printf("Greatest Frequency Component C1: %0.1f Hz\n",max_freq);
         printf("phase C1: %0.1f rad\n", phase);
-        //repeating for channel 2
-        //combining these loops may make things more efficient
-        max_power = 0;
-        for (int i = 1; i < CAPTURE_DEPTH/2; i++) {
-            float power = fft_out2[i].r*fft_out2[i].r+fft_out2[i].i*fft_out2[i].i;
-            if (power>max_power) {
-                max_power=power;
-                max_idx = i;
-            } 
-        }
-        float max_freq2 = freqs[max_idx];
-        float phase2 = atan(fft_out2[max_idx].i/fft_out2[max_idx].r);
-        printf("Greatest Frequency Component C2: %0.1f Hz\n",max_freq2);
-        printf("phase C2: %0.1f rad\n", phase2);
-        //begin FMCW ramp
-        gpio_put(TX, 1);
-        sleep_ms(1000);
-        gpio_put(TX, 0);
-        //may need longer delay here if FMCW ramp is still nonlinear
-        printf("beginning sampling2\n");
-        sample();
-        //we only need one of the two channels for this calculation.
-        for (int i=0;i<CAPTURE_DEPTH;i++) {
-            if(i%2){fft_in1[(int)(i/2)]=(float)capture_buf[i];}
-        }
-        //calculate FFT
-        kiss_fftr(FFTcfg , fft_in1, fft_out1);
-        //determine dominant freq
-        for (int i = 1; i < CAPTURE_DEPTH/2; i++) {
-            float power = fft_out1[i].r*fft_out1[i].r+fft_out1[i].i*fft_out1[i].i;
-            if (power>max_power) {
-                max_power=power;
-                max_idx = i;
-            } 
-        }
-        max_freq = freqs[max_idx];
-        printf("Greatest Frequency Component C1: %0.1f Hz\n",max_freq);
-        //frequency change (from ramp) would be this minus the doppler shift
-
 
     }
 }
@@ -168,12 +127,11 @@ void setup()
     dma_chan = dma_claim_unused_channel(true);
 
     //ADC init
-    adc_gpio_init(26 + CAPTURE_CHANNEL);
-    adc_gpio_init(26 + CAPTURE_CHANNEL2);
+    adc_gpio_init(CAPTURE_CHANNEL);
+    adc_gpio_init(CAPTURE_CHANNEL2);
 
     adc_init();
     //sets the ADC to cycle between reading A0 and A1 (00000011 = 3)
-    adc_set_round_robin(3);
     adc_fifo_setup(
         true,    // Write each completed conversion to the sample FIFO
         true,    // Enable DMA data request (DREQ)
@@ -185,13 +143,13 @@ void setup()
    //sets sampling speed
    //speed is 48MHz/1200 (CPUfreq)/(clkdiv) = 80,000
    //since we are sampling two channels round robin, each channel gets sampled at 40khz
-    adc_set_clkdiv(600);
+    adc_set_clkdiv(1200);
 
     //calculating FFT frequency bins
     //while the ADC is sampling at 80khz, the effective per channel
     //sampling frequency is 40000
     float f_max = 40000;
-    float f_res = f_max / CAPTURE_DEPTH/2;
+    float f_res = f_max / CAPTURE_DEPTH;
     for (int i = 0; i < CAPTURE_DEPTH; i++) {freqs[i] = f_res*i;}
 }
 
